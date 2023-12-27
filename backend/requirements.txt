@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+motor
+pydantic
+SQLAlchemy
+yfinance
+pandas
+python-binance
+python-dotenv
+notebook
