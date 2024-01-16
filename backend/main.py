@@ -1,16 +1,39 @@
-from fastapi import FastAPI, HTTPException, Request, Depends
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import pandas as pd
 from datetime import datetime
+from data_operations import fetch_data, update_data
+import asyncio
 
-from models import RowOrm
+from models import RowOrm, BacktestInput
 from database import engine, SessionLocal
 
-from get_data import get_new_rows, append_new_rows
+from backtest import backtest
+from typing import Dict, Any
+import json
 
 RowOrm.metadata.create_all(bind=engine)
+
+async def run_background_tasks():
+    background_tasks = BackgroundTasks()
+    await update_data(engine, background_tasks)
+
+async def startup_event():
+    # Schedule the background task on application startup
+    await run_background_tasks()
+
+"""@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await run_background_tasks()
+    db = SessionLocal()
+    try:
+        yield db
+    finally: db.close()"""
+
+"""app = FastAPI(lifespan=lifespan)"""
 
 app = FastAPI()
 
@@ -24,67 +47,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#Access the SQL db
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally: db.close()
-
-async def fetch_data(request: Request, db: Session=Depends(get_db)):
-    try:
-        get_new_rows(engine)
-        append_new_rows(engine)
-
-        items = db.query(RowOrm).order_by(RowOrm.timestamp.desc()).limit(100).all()
-        items = reversed(items)
-        data = [
-            {
-                "time": int(pd.to_datetime(item.timestamp).timestamp()),
-                "open": round(item.open, 2),
-                "high": round(item.high, 2),
-                "low": round(item.low, 2),
-                "close": round(item.close, 2),
-            } 
-            for item in items
-        ]
-
-        return JSONResponse(content = data)
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-
-@app.get("/")
-async def get_sql_table(request: Request, db: Session = Depends(get_db)):
-    return await fetch_data(request, db)
-
-@app.get("/sql_data")
-async def get_sql_table(request: Request, db: Session = Depends(get_db)):
-    return await fetch_data(request, db)
-
-#Todo scheduler routes to be used with MongoDB Motor for the scheduler of backtests.
-
 """@app.get("/")
-def read_root():
-    return {"Hello World"}
+async def get_sql_table(request: Request, background_tasks: BackgroundTasks):
+    async with lifespan(app) as db:
+        try:
+            data = await fetch_data(engine, db, background_tasks)
+            return JSONResponse(content=data)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")"""
+        
+#For backtesting with a post request      
+def run_backtest_logic(backtest_input: Dict[str, Any]):
+    print(json.dumps(backtest_input, indent=2))
+    result = backtest(
+        backtest_input['freq'],
+        backtest_input['anchor_period'],
+        int(backtest_input['x']),
+        float(backtest_input['vol_ratio']),
+        float(backtest_input['tp']),
+        float(backtest_input['sl']),
+    )
+    """data = [
+            {
+                "amount of trades": result[0],
+                "winrate": result[1],
+                "cumulative pnl %": result[2],
+            }]"""
+    
+    return result
 
-@app.get("/api/todo")
-async def get_todo():
-    return 1
-
-@app.get("/api/todo{id}")
-async def get_todo_by_id(id):
-    return 1
-
-@app.post("/api/todo")
-async def post_todo(todo):
-    return 1
-
-@app.put("/api/todo{id}")
-async def put_todo(id, data):
-    return 1
-
-@app.delete("/api/todo{id}")
-async def delete_todo(id):
-    return 1"""
+@app.post("/backtest", response_model=Dict[str, Any])
+async def run_backtest(backtest_input: Dict[str, Any]):
+    try:
+        result = run_backtest_logic(backtest_input)
+        return {"result": result.to_dict(orient="records")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

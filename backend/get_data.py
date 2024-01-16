@@ -3,6 +3,7 @@ from datetime import timedelta, datetime
 from binance.client import Client
 from dotenv import load_dotenv
 import os
+from tqdm import tqdm
 
 #Get environment variables from .env
 load_dotenv(".env")
@@ -19,6 +20,7 @@ def get_binance_data(symbol, start):
     frame.set_index("timestamp", inplace=True)
     frame.index = pd.to_datetime(frame.index, unit="ms")
     frame = frame.astype(float)
+    print("Getting data from websocket/historical kline and returning dataframe")
     return frame
 
 #Check the sql database for latest date and compares the index of the dataframe returned by get_binance_data(). It returns only the necessary rows to be appended.
@@ -27,6 +29,7 @@ def get_new_rows(engine):
     max_date_str = pd.read_sql("SELECT MAX(timestamp) FROM binance_btcusdt_1m", engine).values[0][0]
     max_date_timestamp = pd.to_datetime(max_date_str, utc=df.index.tzinfo)
     new_rows = df[df.index> max_date_timestamp]
+    print("Getting new rows, comparing dates")
     return new_rows
 
 #Append the necessary new_rows to the sql DB as determined by the get_new_rows() function
